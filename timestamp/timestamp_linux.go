@@ -120,7 +120,7 @@ func ioctlHWTimestampCaps(fd int, ifname string) (int32, int32, error) {
 	return rxFilter, txFilter, nil
 }
 
-func ioctlTimestamp(fd int, ifname string, filter int32) error {
+func ioctlTimestamp(fd int, ifname string, filter int32, tx_type int32) error {
 	hw, err := unix.IoctlGetHwTstamp(fd, ifname)
 	if errors.Is(err, unix.ENOTSUP) {
 		// for the loopback interface
@@ -164,13 +164,36 @@ func EnableSWTimestamps(connFd int) error {
 	return unix.SetsockoptInt(connFd, unix.SOL_SOCKET, unix.SO_SELECT_ERR_QUEUE, 1)
 }
 
+// EnableHWTimestampsOnestep enables HW onestep timestamps (TX and RX) on the socket
+func EnableHWTimestampsOnestep(connFd int, iface *net.Interface) error {
+	rxFilter, _, err := ioctlHWTimestampCaps(connFd, iface.Name)
+	if err != nil {
+		return err
+	}
+	if err := ioctlTimestamp(connFd, iface.Name, rxFilter, unix.HWTSTAMP_TX_ONESTEP_SYNC); err != nil {
+		return err
+	}
+
+	// Enable hardware timestamp capabilities on socket
+	flags := unix.SOF_TIMESTAMPING_TX_HARDWARE |
+		unix.SOF_TIMESTAMPING_RX_HARDWARE |
+		unix.SOF_TIMESTAMPING_RAW_HARDWARE |
+		unix.SOF_TIMESTAMPING_OPT_TSONLY // Makes the kernel return the timestamp as a cmsg alongside an empty packet, as opposed to alongside the original packet.
+	// Allow reading of HW timestamps via socket
+	if err := unix.SetsockoptInt(connFd, unix.SOL_SOCKET, timestamping, flags); err != nil {
+		return err
+	}
+
+	return unix.SetsockoptInt(connFd, unix.SOL_SOCKET, unix.SO_SELECT_ERR_QUEUE, 1)
+}
+
 // EnableHWTimestamps enables HW timestamps (TX and RX) on the socket
 func EnableHWTimestamps(connFd int, iface *net.Interface) error {
 	rxFilter, _, err := ioctlHWTimestampCaps(connFd, iface.Name)
 	if err != nil {
 		return err
 	}
-	if err := ioctlTimestamp(connFd, iface.Name, rxFilter); err != nil {
+	if err := ioctlTimestamp(connFd, iface.Name, rxFilter, unix.HWTSTAMP_TX_ON); err != nil {
 		return err
 	}
 
@@ -199,7 +222,7 @@ func EnableHWTimestampsRx(connFd int, iface *net.Interface) error {
 	if err != nil {
 		return err
 	}
-	if err := ioctlTimestamp(connFd, iface.Name, rxFilter); err != nil {
+	if err := ioctlTimestamp(connFd, iface.Name, rxFilter, unix.HWTSTAMP_TX_OFF); err != nil {
 		return err
 	}
 
@@ -385,6 +408,10 @@ func ReadTXtimestamp(connFd int) (time.Time, int, error) {
 // EnableTimestamps enables timestamps on the socket based on requested type
 func EnableTimestamps(ts Timestamp, connFd int, iface *net.Interface) error {
 	switch ts {
+	case HWONESTEP:
+		if err := EnableHWTimestampsOnestep(connFd, iface); err != nil {
+			return fmt.Errorf("cannot enable hardware onestep timestamps: %w", err)
+		}
 	case HW:
 		if err := EnableHWTimestamps(connFd, iface); err != nil {
 			return fmt.Errorf("cannot enable hardware timestamps: %w", err)

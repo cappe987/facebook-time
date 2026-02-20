@@ -52,6 +52,8 @@ const (
 	HW
 	// HWRX is a hardware RX timestamp
 	HWRX
+	// HW is a hardware timestamp
+	HWONESTEP
 )
 
 // Unsupported is a string for unsupported timestamp
